@@ -87,7 +87,18 @@ def create_app(image_path: str | None = None) -> Flask:
     def api_fault_move():
         disk = get_disk()
         disk.inject_move_error = True
-        return jsonify({"ok": True, "message": "下一次搬移将报错（一次性）"})
+        return jsonify({"ok": True, "message": "下一批搬移在任何 I/O 前报错（一次性）"})
+
+    @app.post("/api/fault/data-write")
+    def api_fault_data_write():
+        """让下一批的第 N 次数据写报错：模拟批处理写到一半磁盘出错。"""
+        at = request.args.get("at", default=1, type=int)
+        disk = get_disk()
+        disk.inject_data_write_error_at = max(1, at)
+        return jsonify({
+            "ok": True,
+            "message": f"下一批第 {max(1, at)} 次数据写将报错（一次性，槽表不提交）",
+        })
 
     @app.post("/api/fault/truncate")
     def api_fault_truncate():

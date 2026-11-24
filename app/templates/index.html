@@ -59,7 +59,7 @@
 <body>
 <header>
   <h1>单卷虚拟磁盘整理台</h1>
-  <p>按逻辑块号读取 4 KiB · 启动整理回收尾部空间 · 整理期间读请求不中断 · 崩溃重启自动续作</p>
+  <p>按逻辑块号读取 4 KiB · 批量合批整理（每批最多 4 块、2 次 fsync） · 整理期间读请求不中断 · 崩溃重启只看到整批前后布局并自动续作</p>
 </header>
 <main>
   <section class="card">
@@ -73,11 +73,12 @@
       <button class="secondary" onclick="refresh()">刷新状态</button>
     </div>
     <div class="row">
-      <button class="danger" onclick="inject('move')">注入：下一次搬移报错</button>
+      <button class="danger" onclick="inject('move')">注入：下一批搬移报错</button>
+      <button class="danger" onclick="inject('data-write')">注入：批中数据写报错</button>
       <button class="danger" onclick="inject('truncate')">注入：下一次截短报错</button>
       <button class="secondary" onclick="reseed()">重建演示镜像</button>
     </div>
-    <p class="hint">故障为一次性：报错后状态置为 error，数据仍可读，再点“启动整理”从游标续跑。</p>
+    <p class="hint">故障为一次性：批中数据写报错时槽表不会提交，状态置为 error，数据仍可读，再点“启动整理”从游标续跑。</p>
     <div id="msg" class="msg"></div>
     <div id="readout"></div>
   </section>
@@ -91,7 +92,9 @@
       <dt>整理后目标长度</dt><dd id="targetSize">-</dd>
       <dt>槽位 / 在用</dt><dd id="slotInfo">-</dd>
       <dt>整理游标</dt><dd id="cursor">-</dd>
-      <dt>累计搬移次数</dt><dd id="moves">-</dd>
+      <dt>累计搬移块数</dt><dd id="moves">-</dd>
+      <dt>最大提交批量</dt><dd id="maxBatch">-</dd>
+      <dt>本轮 fsync 次数</dt><dd id="fsyncs">-</dd>
       <dt>故障计数</dt><dd id="errors">-</dd>
       <dt>头世代号</dt><dd id="generation">-</dd>
       <dt>镜像外临时峰值</dt><dd id="tempPeak">-</dd>
@@ -128,6 +131,10 @@ async function refresh() {
     s.slot_count + ' / ' + s.used_count + '（逻辑块号：' + s.used_lbns.join(', ') + '）';
   document.getElementById('cursor').textContent = s.cursor;
   document.getElementById('moves').textContent = s.moves;
+  document.getElementById('maxBatch').textContent =
+    s.max_batch_committed + ' 块 / 上限 ' + s.max_batch_capacity +
+    ' 块（每批最多 ' + s.fsyncs_per_batch_capacity + ' 次 fsync）';
+  document.getElementById('fsyncs').textContent = s.fsyncs + ' 次';
   document.getElementById('errors').textContent = s.errors;
   document.getElementById('generation').textContent = s.generation;
   document.getElementById('tempPeak').textContent = s.max_temp_bytes + ' 字节';
@@ -163,8 +170,11 @@ async function startCompact() {
   refresh();
 }
 async function inject(kind) {
-  try { say((await api('/api/fault/' + kind, {method:'POST'})).message, 'ok'); }
-  catch (e) { say(e.message, 'err'); }
+  try {
+    const url = kind === 'data-write'
+      ? '/api/fault/data-write?at=2' : ('/api/fault/' + kind);
+    say((await api(url, {method:'POST'})).message, 'ok');
+  } catch (e) { say(e.message, 'err'); }
 }
 async function reseed() {
   try { say((await api('/api/reseed', {method:'POST'})).message, 'ok'); refresh(); }

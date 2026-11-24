@@ -1,10 +1,13 @@
 """生成内置演示镜像 data/disk.img（带空槽的单卷）。
 
-物理布局（-1 表示空槽，数字表示该槽存放的逻辑块号）::
+物理布局（None 表示空槽，数字表示该槽存放的逻辑块号）::
 
-    [0, -1, 1, 2, -1, 3, 4, 5, -1, 6, 7, 8, -1, 9, 10, 11, -1, 12, 13, -1]
+    [空, 空, 空, 空, 0, 1, 2, 3, 4, 空, 5, 6, 7, 8, 9, 10, 11, 12, 13, 空]
 
-共 20 个槽、14 个在用块（lbn 0..13）、6 个空槽。
+共 20 个槽、14 个在用块（lbn 0..13）、6 个空槽。头部连续 4 个最终空槽，
+使整理一上来就能合出 4 块一批的大批量；随后两批各 4 块、最后一批 2 块，
+批次序列为 4 + 4 + 4 + 2（共 14 次搬移）。
+
 整理完成后文件长度应为 8192 + 14*4096 = 65536 字节，
 lbn 0..13 依次落在物理槽 0..13，各块内容字节不变。
 """
@@ -20,8 +23,8 @@ from app.disk import BLOCK_SIZE, Disk  # noqa: E402
 
 # 物理槽 -> 逻辑块号；None 表示空槽。
 SEED_LAYOUT = [
-    0, None, 1, 2, None, 3, 4, 5, None, 6,
-    7, 8, None, 9, 10, 11, None, 12, 13, None,
+    None, None, None, None, 0, 1, 2, 3, 4, None,
+    5, 6, 7, 8, 9, 10, 11, 12, 13, None,
 ]
 
 
@@ -36,12 +39,13 @@ def block_content(lbn: int) -> bytes:
     return bytes(buf[:BLOCK_SIZE])
 
 
-def build(path: str) -> None:
+def build(path: str, layout: list[int | None] | None = None) -> None:
+    layout = SEED_LAYOUT if layout is None else layout
     if os.path.exists(path):
         os.remove(path)
-    disk = Disk.create(path, slot_count=len(SEED_LAYOUT))
+    disk = Disk.create(path, slot_count=len(layout))
     try:
-        for phys, lbn in enumerate(SEED_LAYOUT):
+        for phys, lbn in enumerate(layout):
             if lbn is not None:
                 disk.seed_write(lbn, block_content(lbn), phys)
         status = disk.status()

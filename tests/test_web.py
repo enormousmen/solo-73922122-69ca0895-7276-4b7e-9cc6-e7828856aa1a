@@ -58,6 +58,14 @@ class WebApiTest(unittest.TestCase):
         st = self.client.get("/api/status").get_json()
         self.assertEqual(st["used_count"], 14)
         self.assertEqual(st["file_size"], DATA_OFFSET + 20 * BLOCK_SIZE)
+        # 批量整理相关字段都应出现在状态接口里。
+        self.assertEqual(st["max_batch_capacity"], 4)
+        self.assertEqual(st["fsyncs_per_batch_capacity"], 2)
+        self.assertEqual(st["max_batch_committed"], 0)
+        self.assertEqual(st["fsyncs"], 0)
+        html = self.client.get("/").get_data(as_text=True)
+        self.assertIn("最大提交批量", html)
+        self.assertIn("本轮 fsync 次数", html)
 
     def test_read_block_api(self):
         resp = self.client.get("/api/blocks/3").get_json()
@@ -72,11 +80,32 @@ class WebApiTest(unittest.TestCase):
         self.assertEqual(r.status_code, 200)
         st = self._wait_state("idle")
         self.assertEqual(st["file_size"], DATA_OFFSET + 14 * BLOCK_SIZE)
+        # 演示镜像批次序列 4+4+4+2：最大提交批量 4；
+        # 本轮 fsync = 4 批*2 + 截短 1 + idle 提交 1 = 10（启动提交不计入）。
+        self.assertEqual(st["max_batch_committed"], 4)
+        self.assertEqual(st["fsyncs"], 10)
+        self.assertEqual(st["moves"], 14)
         # 整理后每个逻辑块仍可按原号读取，内容不变。
         for lbn in range(14):
             resp = self.client.get(f"/api/blocks/{lbn}").get_json()
             self.assertEqual(bytes.fromhex(resp["hex"]),
                              block_content(lbn)[:64])
+
+    def test_injected_data_write_error_then_resume(self):
+        # 批处理写到第 2 块时报错：槽表不提交，重开仍见批前布局。
+        self.client.post("/api/fault/data-write?at=2")
+        self.client.post("/api/compact/start")
+        st = self._wait_state("error")
+        self.assertEqual(st["moves"], 0)
+        self.assertEqual(st["max_batch_committed"], 0)
+        # 错误态数据仍可读。
+        self.assertEqual(self.client.get("/api/blocks/0").status_code, 200)
+        # 续跑至完成，统计正常累计。
+        self.client.post("/api/compact/start")
+        st = self._wait_state("idle")
+        self.assertEqual(st["file_size"], DATA_OFFSET + 14 * BLOCK_SIZE)
+        self.assertEqual(st["max_batch_committed"], 4)
+        self.assertGreaterEqual(st["errors"], 1)
 
     def test_injected_move_error_then_resume(self):
         self.client.post("/api/fault/move")
